@@ -25,6 +25,10 @@ app.use("/", require("./routes/authRoutes"));
 app.use("/", require("./routes/chatRoutes"));
 app.use("/", require("./routes/audioRoutes"));
 
+app.get("/", (req, res) => {
+  res.send("Server is live!");
+});
+
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
