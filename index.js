@@ -11,8 +11,19 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 app.use(cookieParser());
+
+const allowedOrigins = (process.env.CORS_ORIGIN || "").split(",");
+
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || "http://localhost:5182",
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    } else {
+      return callback(new Error("Not allowed by CORS"));
+    }
+  },
   credentials: true
 }));
 app.use("/uploads", express.static("uploads"));
