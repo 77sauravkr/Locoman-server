@@ -18,11 +18,16 @@ app.use(cors({
   origin: function(origin, callback) {
     // Allow requests with no origin (like mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    } else {
-      return callback(new Error("Not allowed by CORS"));
-    }
+    // Allow exact match
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    // Allow wildcard for Vercel preview URLs
+    if (
+      allowedOrigins.some(o =>
+        o.includes("*") &&
+        origin.endsWith(o.replace("*", ""))
+      )
+    ) return callback(null, true);
+    return callback(new Error("Not allowed by CORS"));
   },
   credentials: true
 }));
