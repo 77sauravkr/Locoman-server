@@ -1,12 +1,7 @@
 # Locoman-server
 
 
-Aree sahi pakde bhai 😎
-Tu clearly bol raha hai: **ek hi `README.md` file chahiye** jo **full project ke liye ready to use ho** — bas paste karo aur GitHub pe dikhe.
-
 ---
-
-## ✅ Final `README.md` (One file — Ready to paste)
 
 ```md
 # 🌍 Loco-Man: AI Travel Guide Chatbot
