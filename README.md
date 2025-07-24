@@ -122,20 +122,3 @@ npm run dev
 
 ---
 
-## 🪪 License
-
-MIT License © 2024 Sourav Kumar
-
-```
-
----
-
-### 📌 Final Notes:
-- Ye single file dono repos (mono-repo structure) ke liye best hai.
-- Tu isse paste kar de `README.md` file me at root.
-- GitHub pe turant perfect dikhega.
-
-Agar tu multiple environment me deploy karega (Render, Vercel, etc.) to `deployment` section bhi add karwa dena — bol de, bana dunga.
-
-Ready to go! ✅
-```
