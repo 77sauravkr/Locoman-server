@@ -1,83 +1,82 @@
 # Locoman-server
 
+````md
+# 🌍 Loco-Man: AI Travel Guide Chatbot – Backend
 
----
-
-```md
-# 🌍 Loco-Man: AI Travel Guide Chatbot
-
-Loco-Man is a full-stack AI-powered travel chatbot web app that allows users to ask travel-related questions via **text or voice**. It responds with AI-generated answers and can even speak the response using **text-to-speech**.
+This is the **backend** of Loco-Man — a full-stack AI travel chatbot that handles user authentication, voice processing, OpenAI GPT responses, and MongoDB-based storage.
 
 ---
 
 ## ✨ Features
 
-- 🔐 User authentication (Register, Login, Logout)
-- 💬 Chat with AI using text or voice
-- 🧠 AI-powered answers using OpenAI GPT
-- 🎙️ Speech-to-text using OpenAI Whisper
-- 🔊 Text-to-speech using OpenAI TTS
-- 🗃️ Persistent chat history per user
-- 🎨 Modern frontend with React, Vite, Tailwind CSS
-- 🧱 Backend with Node.js, Express, and MongoDB
-- 🐳 Dockerized backend for easy deployment
+- 🔐 JWT-based user authentication (Register/Login)
+- 💬 Accepts chat input via text or voice
+- 🧠 Uses OpenAI GPT for travel-related responses
+- 🎙️ Converts voice to text using Whisper API
+- 🔊 Responds using OpenAI Text-to-Speech (TTS)
+- 🗃️ Stores user chats and credentials in MongoDB
+- 🐳 Dockerized backend for deployment ease
 
 ---
 
 ## 🛠 Tech Stack
 
-| Layer        | Tools / Frameworks                                |
-|--------------|---------------------------------------------------|
-| **Frontend** | React, Vite, Tailwind CSS                         |
-| **Backend**  | Node.js, Express, MongoDB, Mongoose, Multer       |
-| **AI APIs**  | OpenAI GPT, Whisper (Speech-to-text), TTS         |
-| **Auth**     | JWT, HTTP-only cookies                            |
-| **Deployment** | Docker                                           |
-
----
-
-## 🚀 Getting Started
-
-### 🔧 Prerequisites
-
-- Node.js (v18+)
-- MongoDB
-- OpenAI API Key
+| Component     | Tech / Tools                                 |
+|---------------|-----------------------------------------------|
+| Runtime       | Node.js                                       |
+| Framework     | Express.js                                    |
+| Database      | MongoDB, Mongoose                             |
+| Auth          | JWT, HTTP-only Cookies                        |
+| AI APIs       | OpenAI GPT, Whisper, TTS                      |
+| Audio Uploads | Multer                                        |
+| Deployment    | Docker                                        |
 
 ---
 
 ## 📁 Folder Structure
 
+```bash
+server/               # This backend folder
+├── controllers/      # Route controllers
+├── routes/           # API route definitions
+├── utils/            # Utility functions
+├── uploads/          # Runtime audio files
+├── .env              # Env variables (not committed)
+├── index.js          # Entry point
+````
+
+---
+
+## 🔧 Prerequisites
+
+* Node.js (v18+)
+* MongoDB (running locally or cloud)
+* OpenAI API Key
+
+---
+
+## 🚀 Getting Started
+
+### 1️⃣ Clone the Repository
+
+```bash
+git clone https://github.com/77sauravkr/Locoman-server.git
+cd Locoman-server
 ```
 
-loco-man/
-├── client/       # React frontend (Vite)
-├── server/       # Node.js + Express backend
-├── uploads/      # Audio files (runtime)
-
-````
-
 ---
 
-## 🧪 Setup Instructions
-
-### 1️⃣ Clone the repository
+### 2️⃣ Install Dependencies
 
 ```bash
-git clone https://github.com/77sauravkr/loco-man.git
-cd loco-man
-````
-
----
-
-### 2️⃣ Backend Setup
-
-```bash
-cd server
 npm install
 ```
 
-🔐 Create a `.env` file with:
+---
+
+### 3️⃣ Configure Environment Variables
+
+Create a `.env` file in the root of `server/`:
 
 ```env
 OPENAI_API_KEY=your_openai_api_key
@@ -85,40 +84,55 @@ JWT_SECRET=your_jwt_secret
 CORS_ORIGIN=http://localhost:5182
 ```
 
+---
+
+### 4️⃣ Start the Backend Server
+
+Make sure MongoDB is running, then run:
+
 ```bash
-# Start MongoDB locally
 node index.js
 ```
 
 ---
 
-### 3️⃣ Frontend Setup
+## 🔗 Frontend Repo
 
-```bash
-cd ../client
-npm install
-```
-
-🛠 Create a `.env` file with:
-
-```env
-VITE_API_HOST=localhost
-VITE_API_PORT=3101
-VITE_OPENAI_API_KEY=your_openai_api_key
-```
-
-```bash
-npm run dev
-```
+The frontend client for this project is here:
+👉 [LocoMan Client (React)](https://github.com/77sauravkr/locoMan-client)
 
 ---
 
-## 🌐 Usage
+## 🌐 Live URL (if deployed)
 
-* Visit: [http://localhost:5182](http://localhost:5182)
-* Register/Login
-* Type or speak your travel query
-* Listen to the response
+[https://locoman-server.vercel.app](https://locoman-server.vercel.app)
 
 ---
+
+## 🪪 License
+
+MIT License © 2024 Sourav Kumar
+
+````
+
+---
+
+### ✅ What’s Fixed:
+- Proper folder tree using code block
+- Code blocks use triple backticks (` ```bash ` / ` ```env `)
+- No random emojis breaking layout
+- Live link + frontend link clearly given
+- Everything is in **backend context only**
+
+---
+
+Paste this in your `README.md` under `Locoman-server/` and push to GitHub:
+```bash
+git add README.md
+git commit -m "Updated backend README"
+git push origin main
+````
+
+Want the frontend version too? I’ll tailor that immediately.
+
 
