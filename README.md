@@ -133,6 +133,4 @@ git commit -m "Updated backend README"
 git push origin main
 ````
 
-Want the frontend version too? I’ll tailor that immediately.
-
 
