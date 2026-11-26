@@ -1,28 +1,31 @@
 {
-  "name": "locoman",
-  "version": "1.0.0",
-  "description": "",
+  "name": "locoman-server",
+  "version": "2.0.0",
+  "description": "LocoMan AI travel guide API",
   "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node index.js"
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "test": "node --test --test-concurrency=1 test/*.test.js"
+  },
   "dependencies": {
-    "@google-cloud/text-to-speech": "^5.8.0",
-    "axios": "^1.7.9",
     "bcrypt": "^6.0.0",
     "cookie-parser": "^1.4.7",
-    "cors": "^2.8.5",
-    "dotenv": "^16.5.0",
-    "express": "^4.21.2",
-    "fs": "^0.0.1-security",
-    "jsonwebtoken": "^9.0.2",
-    "mime-types": "^3.0.1",
-    "mongoose": "^8.16.0",
-    "multer": "^1.4.5-lts.1",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.10",
+    "express": "^4.22.3",
+    "express-rate-limit": "^7.5.1",
+    "helmet": "^8.3.0",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^8.24.11",
+    "multer": "^2.5.0",
     "openai": "^4.104.0"
+  },
+  "devDependencies": {
+    "supertest": "^7.3.2"
   }
 }

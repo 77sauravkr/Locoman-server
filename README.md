@@ -1,136 +1,43 @@
-# Locoman-server
+# LocoMan Server
 
-````md
-# 🌍 Loco-Man: AI Travel Guide Chatbot – Backend
+API for LocoMan, an AI travel guide with text and voice chat.
+Client: https://github.com/77sauravkr/locoMan-client
 
-This is the **backend** of Loco-Man — a full-stack AI travel chatbot that handles user authentication, voice processing, OpenAI GPT responses, and MongoDB-based storage.
+Express, MongoDB (Mongoose), OpenAI (chat, speech-to-text, text-to-speech).
 
----
+## Run locally
 
-## ✨ Features
-
-- 🔐 JWT-based user authentication (Register/Login)
-- 💬 Accepts chat input via text or voice
-- 🧠 Uses OpenAI GPT for travel-related responses
-- 🎙️ Converts voice to text using Whisper API
-- 🔊 Responds using OpenAI Text-to-Speech (TTS)
-- 🗃️ Stores user chats and credentials in MongoDB
-- 🐳 Dockerized backend for deployment ease
-
----
-
-## 🛠 Tech Stack
-
-| Component     | Tech / Tools                                 |
-|---------------|-----------------------------------------------|
-| Runtime       | Node.js                                       |
-| Framework     | Express.js                                    |
-| Database      | MongoDB, Mongoose                             |
-| Auth          | JWT, HTTP-only Cookies                        |
-| AI APIs       | OpenAI GPT, Whisper, TTS                      |
-| Audio Uploads | Multer                                        |
-| Deployment    | Docker                                        |
-
----
-
-## 📁 Folder Structure
-
-```bash
-server/               # This backend folder
-├── controllers/      # Route controllers
-├── routes/           # API route definitions
-├── utils/            # Utility functions
-├── uploads/          # Runtime audio files
-├── .env              # Env variables (not committed)
-├── index.js          # Entry point
-````
-
----
-
-## 🔧 Prerequisites
-
-* Node.js (v18+)
-* MongoDB (running locally or cloud)
-* OpenAI API Key
-
----
-
-## 🚀 Getting Started
-
-### 1️⃣ Clone the Repository
-
-```bash
-git clone https://github.com/77sauravkr/Locoman-server.git
-cd Locoman-server
-```
-
----
-
-### 2️⃣ Install Dependencies
+Needs Node 20+, MongoDB and an OpenAI API key.
 
 ```bash
 npm install
+cp .env.example .env   # fill in JWT_SECRET and OPENAI_API_KEY
+npm run dev            # http://localhost:10000
+npm test               # needs MongoDB; the AI is faked, no key or cost
 ```
 
----
+## API
 
-### 3️⃣ Configure Environment Variables
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/health` | 200 when the database is connected |
+| POST | `/api/auth/register`, `/login`, `/logout` | Session in an HTTP-only cookie |
+| GET | `/api/auth/me` | Current user |
+| GET | `/api/chats` | List chats |
+| GET, PATCH, DELETE | `/api/chats/:chatId` | Read, rename, delete |
+| POST | `/api/chats/:chatId/messages` | `{ text }`, reply streamed as Server-Sent Events |
+| POST | `/api/chats/:chatId/voice` | Multipart field `audio` (max 10 MB) |
 
-Create a `.env` file in the root of `server/`:
+## Deploy (Render)
 
-```env
-OPENAI_API_KEY=your_openai_api_key
-JWT_SECRET=your_jwt_secret
-CORS_ORIGIN=http://localhost:5182
-```
+Set `NODE_ENV=production`, `MONGODB_URI`, `JWT_SECRET` (32+ characters) and `OPENAI_API_KEY`.
+The server refuses to start if any of the last three is missing. Health check path: `/api/health`.
 
----
+The client calls this API through a same-origin `/api` rewrite, so no CORS setting is needed.
 
-### 4️⃣ Start the Backend Server
+## Safeguards
 
-Make sure MongoDB is running, then run:
-
-```bash
-node index.js
-```
-
----
-
-## 🔗 Frontend Repo
-
-The frontend client for this project is here:
-👉 [LocoMan Client (React)](https://github.com/77sauravkr/locoMan-client)
-
----
-
-## 🌐 Live URL (if deployed)
-
-[https://locoman-server.vercel.app](https://locoman-server.vercel.app)
-
----
-
-## 🪪 License
-
-MIT License © 2024 Sourav Kumar
-
-````
-
----
-
-### ✅ What’s Fixed:
-- Proper folder tree using code block
-- Code blocks use triple backticks (` ```bash ` / ` ```env `)
-- No random emojis breaking layout
-- Live link + frontend link clearly given
-- Everything is in **backend context only**
-
----
-
-Paste this in your `README.md` under `Locoman-server/` and push to GitHub:
-```bash
-git add README.md
-git commit -m "Updated backend README"
-git push origin main
-````
-
-
+- OpenAI key stays on the server.
+- Password hashing (bcrypt), login and message rate limits.
+- Daily AI limits per user (`USER_DAILY_LIMIT`) and overall (`GLOBAL_DAILY_LIMIT`).
+- Audio is processed in memory and never written to disk.
