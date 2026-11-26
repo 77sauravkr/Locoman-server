@@ -11,6 +11,7 @@ async function withGemini(status, run) {
     req.on("end", () => {
       const model = req.url.match(/models\/([^:]+):/)[1];
       called.push(model);
+      if (model === "main" && status === "hang") return; // never answers
       if (model === "main") {
         res.writeHead(status, { "content-type": "application/json" });
         return res.end(JSON.stringify({ error: { code: status, message: "busy" } }));
@@ -26,11 +27,13 @@ async function withGemini(status, run) {
     geminiApiKey: "test",
     model: "main",
     fallbackModel: "backup",
+    modelTimeoutMs: 300,
     geminiBaseUrl: `http://127.0.0.1:${server.address().port}`,
   });
   try {
     await run(ai, called);
   } finally {
+    server.closeAllConnections();
     server.close();
   }
 }
@@ -53,4 +56,11 @@ test("does not retry a rejected request on another model", () =>
   withGemini(400, async (ai, called) => {
     await assert.rejects(read(ai), (err) => err.status === 400);
     assert.ok(!called.includes("backup"));
+  }));
+
+test("falls back when the first model never answers", () =>
+  withGemini("hang", async (ai, called) => {
+    assert.equal(await read(ai), "ok");
+    assert.equal(await ai.transcribe(Buffer.from("x"), "audio/webm"), "ok");
+    assert.ok(called.includes("main") && called.includes("backup"));
   }));

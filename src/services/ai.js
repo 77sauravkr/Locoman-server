@@ -31,70 +31,86 @@ const toContents = (history) =>
   }));
 
 // Busy, overloaded or out of quota: worth trying the other model.
-const BUSY = new Set([429, 500, 503]);
+const BUSY = new Set([429, 500, 503, 504]);
+const LAST_TRY_MS = 45_000;
 
 function createAi(config) {
-  const models = [...new Set([config.model, config.fallbackModel])].filter(Boolean);
-  const canFallBack = (err, index, signal) => BUSY.has(err.status) && index < models.length - 1 && !signal?.aborted;
-
   const client = new GoogleGenAI({
     apiKey: config.geminiApiKey,
     apiVersion: "v1beta",
     httpOptions: { timeout: 60_000, ...(config.geminiBaseUrl && { baseUrl: config.geminiBaseUrl }) },
   });
+  const models = [...new Set([config.model, config.fallbackModel])].filter(Boolean);
 
-  async function generate(request) {
+  // Calls run(model, signal, answered) until one model works. An overloaded model can also
+  // just hang, so each has a time limit that stops once it starts to answer.
+  async function* tryModels(run, userSignal) {
     for (let i = 0; ; i++) {
+      const last = i === models.length - 1;
+      const limit = new AbortController();
+      const timer = setTimeout(() => limit.abort(), last ? LAST_TRY_MS : config.modelTimeoutMs);
+      let started = false;
+      const answered = () => {
+        started = true;
+        clearTimeout(timer);
+      };
       try {
-        return await client.models.generateContent({ ...request, model: models[i] });
+        const signal = userSignal ? AbortSignal.any([userSignal, limit.signal]) : limit.signal;
+        yield* run(models[i], signal, answered);
+        // Some versions end the stream quietly when aborted.
+        if (!started && limit.signal.aborted) throw new Error("Model timed out");
+        return;
       } catch (err) {
-        if (!canFallBack(err, i)) throw err;
+        const timedOut = limit.signal.aborted && !userSignal?.aborted;
+        if (timedOut) err = Object.assign(new Error(`${models[i]} timed out`), { status: 503 });
+        // Part of an answer is already on screen, so do not start a second one.
+        if (started || last || userSignal?.aborted || !BUSY.has(err.status)) throw err;
         console.warn(`${models[i]} unavailable (${err.status}), trying ${models[i + 1]}`);
+      } finally {
+        clearTimeout(timer);
       }
     }
   }
 
   return {
-    async *streamReply(history, { signal, location } = {}) {
-      for (let i = 0; ; i++) {
-        let started = false;
-        try {
-          const stream = await client.models.generateContentStream({
-            model: models[i],
-            contents: toContents(history),
-            // The limit includes the model's thinking tokens, so it is generous.
-            config: { systemInstruction: systemInstruction({ location }), maxOutputTokens: 8192, abortSignal: signal },
-          });
-          for await (const chunk of stream) {
-            if (chunk.text) {
-              started = true;
-              yield chunk.text;
-            }
+    streamReply(history, { signal, location } = {}) {
+      return tryModels(async function* (model, attemptSignal, answered) {
+        const stream = await client.models.generateContentStream({
+          model,
+          contents: toContents(history),
+          // The limit includes the model's thinking tokens, so it is generous.
+          config: { systemInstruction: systemInstruction({ location }), maxOutputTokens: 8192, abortSignal: attemptSignal },
+        });
+        for await (const chunk of stream) {
+          if (chunk.text) {
+            answered();
+            yield chunk.text;
           }
-          return;
-        } catch (err) {
-          // Part of an answer is already on screen, so do not start a second one.
-          if (started || !canFallBack(err, i, signal)) throw err;
-          console.warn(`${models[i]} unavailable (${err.status}), trying ${models[i + 1]}`);
         }
-      }
+      }, signal);
     },
 
     async transcribe(buffer, mimeType) {
-      const result = await generate({
-        contents: [
-          {
-            role: "user",
-            parts: [
-              inline(mimeType, buffer.toString("base64")),
-              {
-                text: "Transcribe the speech in this audio exactly, in its original language. Reply with the transcript only. If there is no speech, reply with nothing.",
-              },
-            ],
-          },
-        ],
-      });
-      return (result.text || "").trim();
+      const contents = [
+        {
+          role: "user",
+          parts: [
+            inline(mimeType, buffer.toString("base64")),
+            {
+              text: "Transcribe the speech in this audio exactly, in its original language. Reply with the transcript only. If there is no speech, reply with nothing.",
+            },
+          ],
+        },
+      ];
+      let text = "";
+      for await (const part of tryModels(async function* (model, abortSignal, answered) {
+        const result = await client.models.generateContent({ model, contents, config: { abortSignal } });
+        answered();
+        yield result.text || "";
+      })) {
+        text += part;
+      }
+      return text.trim();
     },
   };
 }
