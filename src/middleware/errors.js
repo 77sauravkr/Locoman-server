@@ -14,7 +14,7 @@ function errorHandler(err, req, res, next) {
   if (err.code === "LIMIT_FILE_SIZE") return res.status(413).json({ error: "Recording is too large" });
   if (err.name === "MulterError") return res.status(400).json({ error: "Invalid upload" });
   const status = err instanceof HttpError ? err.status : err.type ? err.status : 500;
-  if (status >= 500 || !status) {
+  if (!(err instanceof HttpError) && (status >= 500 || !status)) {
     console.error(err);
     return res.status(500).json({ error: "Something went wrong. Please try again." });
   }

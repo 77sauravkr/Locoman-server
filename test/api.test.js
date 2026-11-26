@@ -9,21 +9,22 @@ const URI = process.env.MONGODB_URI_TEST || "mongodb://127.0.0.1:27017/locoman_t
 const config = loadConfig({
   MONGODB_URI: URI,
   JWT_SECRET: "test-secret-that-is-long-enough-0123456789",
-  OPENAI_API_KEY: "test",
+  GEMINI_API_KEY: "test",
   USER_DAILY_LIMIT: "4",
 });
 
 let lastHistory;
+let lastOptions;
 let failReply = false;
 const ai = {
-  async *streamReply(history) {
+  async *streamReply(history, options) {
     lastHistory = history;
-    if (failReply) throw new Error("secret upstream detail");
+    lastOptions = options;
+    if (failReply) throw Object.assign(new Error("secret upstream detail"), { status: failReply });
     yield "Hello ";
     yield "traveller";
   },
   transcribe: async () => "Best food in Jaipur?",
-  speak: async () => Buffer.from("mp3"),
 };
 const app = createApp({ config, ai });
 
@@ -49,7 +50,7 @@ const events = (res) =>
 test("config refuses missing or weak secrets", () => {
   assert.throws(() => loadConfig({}), /Missing environment variables/);
   assert.throws(
-    () => loadConfig({ MONGODB_URI: "x", JWT_SECRET: "short", OPENAI_API_KEY: "x" }),
+    () => loadConfig({ MONGODB_URI: "x", JWT_SECRET: "short", GEMINI_API_KEY: "x" }),
     /at least 32/,
   );
 });
@@ -113,21 +114,20 @@ test("rename and delete", async () => {
 
 test("upstream failure hides details and saves nothing", async () => {
   const agent = await signUp();
-  failReply = true;
+  failReply = 500;
   const res = await agent.post("/api/chats/c1/messages").send({ text: "hi" }).expect(200);
   assert.match(events(res)[0].error, /Could not get a reply/);
   assert.doesNotMatch(res.text, /secret upstream detail/);
   await agent.get("/api/chats/c1").expect(404);
 });
 
-test("voice query returns transcript, reply and audio", async () => {
+test("voice query returns transcript and reply", async () => {
   const agent = await signUp();
   const res = await agent
     .post("/api/chats/v1/voice")
     .attach("audio", Buffer.from("fake"), { filename: "a.webm", contentType: "audio/webm" })
     .expect(200);
   assert.deepEqual(res.body.messages.map((m) => m.text), ["Best food in Jaipur?", "Hello traveller"]);
-  assert.equal(Buffer.from(res.body.audio, "base64").toString(), "mp3");
   await agent
     .post("/api/chats/v1/voice")
     .attach("audio", Buffer.from("x"), { filename: "a.txt", contentType: "text/plain" })
@@ -154,4 +154,32 @@ test("a failed database connection is retried by the next request", async () => 
   const flaky = createApp({ config, ai, ready });
   await request(flaky).get("/api/health").expect(503);
   await request(flaky).get("/api/health").expect(200);
+});
+
+test("photo and location reach the model; only a flag is stored", async () => {
+  const agent = await signUp();
+  const image = { mimeType: "image/jpeg", data: Buffer.alloc(200_000, 1).toString("base64") };
+  await agent.post("/api/chats/p/messages").send({ image, location: { lat: 26.912345, lng: 75.787654 } }).expect(200);
+  assert.deepEqual(lastHistory.at(-1).image, image);
+  assert.deepEqual(lastOptions.location, { lat: 26.91, lng: 75.79 });
+  const chat = await agent.get("/api/chats/p").expect(200);
+  assert.equal(chat.body.messages[0].hasImage, true);
+  assert.doesNotMatch(JSON.stringify(chat.body), /26\.9/);
+});
+
+test("bad or oversized photos and large bodies are rejected", async () => {
+  const agent = await signUp();
+  await agent.post("/api/chats/p/messages").send({ image: { mimeType: "text/html", data: "aGk=" } }).expect(400);
+  await agent.post("/api/chats/p/messages").send({ image: { mimeType: "image/png", data: "<script>" } }).expect(400);
+  await agent.post("/api/chats/p/messages").send({ image: { mimeType: "image/png", data: "A".repeat(2_900_000) } }).expect(413);
+  await agent.patch("/api/chats/p").send({ title: "a".repeat(40_000) }).expect(413);
+  await request(app).post("/api/chats/p/messages").send({ text: "a".repeat(100_000) }).expect(401);
+});
+
+test("an AI rate limit is explained without leaking details", async () => {
+  const agent = await signUp();
+  failReply = 429;
+  const res = await agent.post("/api/chats/c1/messages").send({ text: "hi" }).expect(200);
+  assert.match(events(res)[0].error, /usage limit/);
+  assert.doesNotMatch(res.text, /secret upstream detail/);
 });

@@ -14,7 +14,9 @@ function createApp({ config, ai, ready = async () => {} }) {
   app.use(helmet());
   // The web client calls the API same-origin through a proxy; CORS is only for other listed origins.
   if (config.corsOrigins.length) app.use(cors({ origin: config.corsOrigins, credentials: true }));
-  app.use(express.json({ limit: "32kb" }));
+  // The message route parses its own, larger body (photos) after the login check.
+  const smallJson = express.json({ limit: "32kb" });
+  app.use((req, res, next) => (/^\/api\/chats\/[^/]+\/messages\/?$/i.test(req.path) ? next() : smallJson(req, res, next)));
   app.use(cookieParser());
 
   app.get("/", (req, res) => res.send("Server is live!"));

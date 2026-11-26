@@ -9,15 +9,43 @@ const MAX_CHATS = 100;
 const MAX_MESSAGES = 200;
 const HISTORY = 20;
 const CHAT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+// Upload type -> type name Gemini accepts.
 const AUDIO_TYPES = {
-  "audio/webm": "webm",
-  "video/webm": "webm",
-  "audio/mp4": "mp4",
-  "audio/x-m4a": "m4a",
-  "audio/ogg": "ogg",
-  "audio/mpeg": "mp3",
-  "audio/wav": "wav",
+  "audio/webm": "audio/webm",
+  "video/webm": "audio/webm",
+  "audio/mp4": "audio/m4a",
+  "audio/x-m4a": "audio/m4a",
+  "audio/ogg": "audio/ogg",
+  "audio/mpeg": "audio/mp3",
+  "audio/wav": "audio/wav",
 };
+const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const MAX_IMAGE_CHARS = 2_800_000; // about 2 MB once decoded
+const PHOTO_QUESTION = "What is this place or thing, and what should a traveller know about it?";
+
+function readImage(image) {
+  if (image === undefined || image === null) return null;
+  const { mimeType, data } = image;
+  if (!IMAGE_TYPES.has(mimeType) || typeof data !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(data))
+    throw new HttpError(400, "Unsupported image");
+  if (data.length > MAX_IMAGE_CHARS) throw new HttpError(413, "Image is too large");
+  return { mimeType, data };
+}
+
+// Rounded to about 1 km and used for this reply only; never stored.
+function readLocation(location) {
+  const { lat, lng } = location || {};
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return undefined;
+  return { lat: Number(lat.toFixed(2)), lng: Number(lng.toFixed(2)) };
+}
+
+function aiError(err) {
+  if (err instanceof HttpError) return err;
+  console.error("AI request failed:", err.status || "", err.message);
+  return err.status === 429
+    ? new HttpError(429, "The AI usage limit was reached. Please try again in a few minutes.")
+    : new HttpError(502, "Could not get a reply. Please try again.");
+}
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -31,16 +59,26 @@ const titleFrom = (text) => {
   return line.length > 60 ? `${line.slice(0, 57)}...` : line;
 };
 
-const publicMessage = (m) => ({ id: String(m._id), role: m.role, text: m.text, createdAt: m.createdAt });
+const publicMessage = (m) => ({
+  id: String(m._id),
+  role: m.role,
+  text: m.text,
+  createdAt: m.createdAt,
+  ...(m.image && { hasImage: true }),
+});
 
-const toModel = (messages) =>
-  messages
+const toModel = (messages) => {
+  const history = messages
     .filter((m) => m.text)
     .slice(-HISTORY)
     .map((m) => ({
       role: m.role === "user" ? "user" : "assistant",
       content: m.text.slice(0, MAX_TEXT * 2),
     }));
+  // The conversation sent to the model must start with the user.
+  while (history[0]?.role === "assistant") history.shift();
+  return history;
+};
 
 module.exports = ({ config, ai }) => {
   const router = express.Router();
@@ -63,17 +101,20 @@ module.exports = ({ config, ai }) => {
     next();
   });
 
-  const saveExchange = async (filter, question, answer) => {
+  const saveExchange = async (filter, question, answer, image = false) => {
     const chat = (await Chat.findOne(filter)) || new Chat({ ...filter, messages: [] });
     if (!chat.title || chat.title === "New Chat") chat.title = titleFrom(question);
-    chat.messages.push({ role: "user", text: question }, { role: "bot", text: answer });
+    // Photos are not stored, only the fact that one was sent.
+    chat.messages.push({ role: "user", text: question, ...(image && { image: true }) }, { role: "bot", text: answer });
     await chat.save();
     return { title: chat.title, messages: chat.messages.slice(-2).map(publicMessage) };
   };
 
-  const historyFor = async (filter, question) => {
+  const historyFor = async (filter, question, image) => {
     const chat = await Chat.findOne(filter);
-    return toModel([...(chat?.messages || []), { role: "user", text: question }]);
+    const history = toModel([...(chat?.messages || []), { role: "user", text: question }]);
+    if (image) history[history.length - 1].image = image;
+    return history;
   };
 
   router.get(
@@ -117,18 +158,21 @@ module.exports = ({ config, ai }) => {
   router.post(
     "/:chatId/messages",
     burst,
+    express.json({ limit: "3mb" }),
     asyncHandler(async (req, res, next) => {
-      const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
+      const image = readImage(req.body?.image);
+      const text = (typeof req.body?.text === "string" ? req.body.text.trim() : "") || (image ? PHOTO_QUESTION : "");
       if (!text) throw new HttpError(400, "Message is empty");
       if (text.length > MAX_TEXT) throw new HttpError(400, `Message is too long (max ${MAX_TEXT} characters)`);
-      req.text = text;
+      req.input = { text, image, location: readLocation(req.body?.location) };
       next();
     }),
     checkRoom,
     quota,
     asyncHandler(async (req, res) => {
       const filter = mine(req);
-      const history = await historyFor(filter, req.text);
+      const { text, image, location } = req.input;
+      const history = await historyFor(filter, text, image);
       const abort = new AbortController();
       res.on("close", () => abort.abort());
 
@@ -142,22 +186,21 @@ module.exports = ({ config, ai }) => {
 
       let answer = "";
       try {
-        for await (const delta of ai.streamReply(history, { signal: abort.signal })) {
+        for await (const delta of ai.streamReply(history, { signal: abort.signal, location })) {
           answer += delta;
           send({ delta });
         }
         if (!answer) throw new Error("Empty reply from model");
       } catch (err) {
         if (!abort.signal.aborted) {
-          console.error("Chat reply failed:", err.message);
-          send({ error: "Could not get a reply. Please try again." });
+          send({ error: aiError(err).message });
           return res.end();
         }
       }
       // If the user pressed Stop, keep what was already generated.
       if (answer) {
         try {
-          send({ done: true, ...(await saveExchange(filter, req.text, answer)) });
+          send({ done: true, ...(await saveExchange(filter, text, answer, Boolean(image))) });
         } catch (err) {
           console.error("Saving chat failed:", err.message);
           send({ error: "Reply could not be saved." });
@@ -180,17 +223,19 @@ module.exports = ({ config, ai }) => {
     asyncHandler(async (req, res) => {
       const filter = mine(req);
       const { buffer, mimetype } = req.file;
-      const question = (await ai.transcribe(buffer, `voice.${AUDIO_TYPES[mimetype]}`, mimetype)).slice(0, MAX_TEXT);
-      if (!question) throw new HttpError(422, "Could not hear anything. Please try again.");
-
+      let question;
       let answer = "";
-      for await (const delta of ai.streamReply(await historyFor(filter, question))) answer += delta;
-      if (!answer) throw new Error("Empty reply from model");
-
-      const saved = await saveExchange(filter, question, answer);
-      // Speech is optional: the text reply is still returned if it fails.
-      const speech = await ai.speak(answer).catch((err) => console.error("TTS failed:", err.message));
-      res.json({ ...saved, audio: speech ? speech.toString("base64") : null });
+      try {
+        question = (await ai.transcribe(buffer, AUDIO_TYPES[mimetype])).slice(0, MAX_TEXT);
+        if (!question) throw new HttpError(422, "Could not hear anything. Please try again.");
+        for await (const delta of ai.streamReply(await historyFor(filter, question))) answer += delta;
+        if (!answer) throw new Error("Empty reply from model");
+      } catch (err) {
+        // 4xx messages are safe to show; anything from the AI service is reworded.
+        throw aiError(err);
+      }
+      // The browser reads the reply aloud.
+      res.json(await saveExchange(filter, question, answer));
     }),
   );
 

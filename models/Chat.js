@@ -10,6 +10,7 @@ const chatSchema = new mongoose.Schema(
         role: { type: String, enum: ["user", "bot"], required: true },
         // Not required: documents saved by the old client may have empty text.
         text: String,
+        image: Boolean,
         createdAt: { type: Date, default: Date.now },
       },
     ],
