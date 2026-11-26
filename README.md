@@ -23,6 +23,10 @@ npm test               # needs MongoDB; the AI is faked, no key or cost
 | GET | `/api/health` | 200 when the database is connected |
 | POST | `/api/auth/register`, `/login`, `/logout` | Session in an HTTP-only cookie |
 | GET | `/api/auth/me` | Current user |
+| POST | `/api/auth/reset`, `/google`, `/password`, `/recovery-code` | Recovery, Google sign-in, account changes |
+| DELETE | `/api/auth/account` | Delete the account and its data |
+| various | `/api/trips` | Itineraries, AI planning, group invites, expenses |
+| GET | `/api/places/weather`, `/locate` | Weather (Open-Meteo) and map lookup (OpenStreetMap) |
 | GET | `/api/chats` | List chats |
 | GET, PATCH, DELETE | `/api/chats/:chatId` | Read, rename, delete |
 | POST | `/api/chats/:chatId/messages` | `{ text, image?, location? }`, reply streamed as Server-Sent Events |

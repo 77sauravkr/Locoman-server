@@ -22,6 +22,51 @@ function systemInstruction({ location } = {}) {
   return lines.join("\n");
 }
 
+const PLAN_SCHEMA = {
+  type: "OBJECT",
+  required: ["title", "days"],
+  properties: {
+    title: { type: "STRING" },
+    days: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        required: ["title", "items"],
+        properties: {
+          title: { type: "STRING" },
+          items: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              required: ["name"],
+              properties: {
+                time: { type: "STRING" },
+                name: { type: "STRING" },
+                notes: { type: "STRING" },
+                lat: { type: "NUMBER" },
+                lng: { type: "NUMBER" },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
+function planPrompt({ destination, days, budget, interests, notes }) {
+  return [
+    `Plan a ${days}-day trip to ${destination}.`,
+    budget && `Budget: ${budget}.`,
+    interests && `Interests: ${interests}.`,
+    notes && `Follow this earlier suggestion where it makes sense:\n${notes}`,
+    "Give 3 to 6 items per day in visiting order, with a time like 09:00, the real place name, one short practical note,",
+    "and approximate latitude and longitude only when you are confident of them.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 const inline = (mimeType, data) => ({ inlineData: { mimeType, data } });
 
 const toContents = (history) =>
@@ -88,6 +133,22 @@ function createAi(config) {
           }
         }
       }, signal);
+    },
+
+    async planTrip(request) {
+      let json = "";
+      for await (const part of tryModels(async function* (model, abortSignal, answered) {
+        const result = await client.models.generateContent({
+          model,
+          contents: planPrompt(request),
+          config: { responseMimeType: "application/json", responseSchema: PLAN_SCHEMA, abortSignal },
+        });
+        answered();
+        yield result.text || "";
+      })) {
+        json += part;
+      }
+      return JSON.parse(json);
     },
 
     async transcribe(buffer, mimeType) {

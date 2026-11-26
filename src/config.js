@@ -18,8 +18,10 @@ function loadConfig(env = process.env) {
     model: env.GEMINI_MODEL || "gemini-3.8-flash",
     fallbackModel: env.GEMINI_FALLBACK_MODEL || "gemini-3.5-flash-lite",
     modelTimeoutMs: int(env.GEMINI_TIMEOUT_MS, 20_000),
+    googleClientId: env.GOOGLE_CLIENT_ID || "",
     corsOrigins: (env.CORS_ORIGIN || "").split(",").map((o) => o.trim()).filter(Boolean),
     trustProxy: int(env.TRUST_PROXY, 1),
+    registerHourlyLimit: int(env.REGISTER_HOURLY_LIMIT, 20),
     userDailyLimit: int(env.USER_DAILY_LIMIT, 50),
     globalDailyLimit: int(env.GLOBAL_DAILY_LIMIT, 500),
   };

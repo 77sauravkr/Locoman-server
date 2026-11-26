@@ -5,10 +5,12 @@ const cookieParser = require("cookie-parser");
 const mongoose = require("mongoose");
 const authRoutes = require("./routes/auth");
 const chatRoutes = require("./routes/chats");
+const tripRoutes = require("./routes/trips");
+const placeRoutes = require("./routes/places");
 const requireAuth = require("./middleware/auth");
 const { errorHandler, asyncHandler } = require("./middleware/errors");
 
-function createApp({ config, ai, ready = async () => {} }) {
+function createApp({ config, ai, places, verifyGoogle = null, ready = async () => {} }) {
   const app = express();
   app.set("trust proxy", config.trustProxy);
   app.use(helmet());
@@ -16,7 +18,8 @@ function createApp({ config, ai, ready = async () => {} }) {
   if (config.corsOrigins.length) app.use(cors({ origin: config.corsOrigins, credentials: true }));
   // The message route parses its own, larger body (photos) after the login check.
   const smallJson = express.json({ limit: "32kb" });
-  app.use((req, res, next) => (/^\/api\/chats\/[^/]+\/messages\/?$/i.test(req.path) ? next() : smallJson(req, res, next)));
+  const tripJson = express.json({ limit: "512kb" }); // a long itinerary
+  app.use((req, res, next) => (/^\/api\/chats\/[^/]+\/messages\/?$/i.test(req.path) ? next() : (/^\/api\/trips\/[a-f0-9]{24}\/?$/i.test(req.path) ? tripJson : smallJson)(req, res, next)));
   app.use(cookieParser());
 
   app.get("/", (req, res) => res.send("Server is live!"));
@@ -42,7 +45,10 @@ function createApp({ config, ai, ready = async () => {} }) {
       next();
     }),
   );
-  app.use("/api/auth", authRoutes(config));
+  app.get("/api/config", (req, res) => res.json({ googleClientId: config.googleClientId || null }));
+  app.use("/api/auth", authRoutes(config, { verifyGoogle }));
+  app.use("/api/trips", requireAuth(config), tripRoutes({ config, ai }));
+  app.use("/api/places", requireAuth(config), placeRoutes({ places }));
   app.use("/api/chats", requireAuth(config), chatRoutes({ config, ai }));
 
   app.use((req, res) => res.status(404).json({ error: "Not found" }));

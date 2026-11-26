@@ -11,6 +11,7 @@ const config = loadConfig({
   JWT_SECRET: "test-secret-that-is-long-enough-0123456789",
   GEMINI_API_KEY: "test",
   USER_DAILY_LIMIT: "4",
+  REGISTER_HOURLY_LIMIT: "1000",
 });
 
 let lastHistory;
@@ -26,7 +27,29 @@ const ai = {
   },
   transcribe: async () => "Best food in Jaipur?",
 };
-const app = createApp({ config, ai });
+ai.planTrip = async (request) => {
+  lastPlanRequest = request;
+  return {
+    title: "Jaipur getaway",
+    days: Array.from({ length: 5 }, (_, i) => ({
+      title: `Day ${i + 1}`,
+      items: [{ time: "09:00", name: "Amber Fort", lat: 26.98, lng: 75.85 }, { name: "" }, { name: "Bad pin", lat: 999, lng: 0 }],
+    })),
+  };
+};
+let lastPlanRequest;
+const places = {
+  weather: async (q) => (q === "Nowhere" ? null : { place: q, days: [] }),
+  locate: async () => {
+    throw new Error("internal upstream detail");
+  },
+};
+const verifyGoogle = async (credential) => {
+  const [sub, email] = credential.split("|");
+  if (!email) throw new Error("bad token");
+  return { sub, email };
+};
+const app = createApp({ config, ai, places, verifyGoogle });
 
 before(() => mongoose.connect(URI, { serverSelectionTimeoutMS: 3000 }));
 beforeEach(async () => {
@@ -182,4 +205,122 @@ test("an AI rate limit is explained without leaking details", async () => {
   const res = await agent.post("/api/chats/c1/messages").send({ text: "hi" }).expect(200);
   assert.match(events(res)[0].error, /usage limit/);
   assert.doesNotMatch(res.text, /secret upstream detail/);
+});
+
+test("recovery code resets the password once and ends old sessions", async () => {
+  const old = request.agent(app);
+  const created = await old.post("/api/auth/register").send({ username: "asha", password: "password123" }).expect(200);
+  const code = created.body.recoveryCode;
+  assert.match(code, /^[A-Z2-9]{4}(-[A-Z2-9]{4}){3}$/);
+  const reset = (recoveryCode) =>
+    request(app).post("/api/auth/reset").send({ username: "asha", recoveryCode, newPassword: "newpassword456" });
+  await reset("AAAA-AAAA-AAAA-AAAA").expect(401);
+  const ok = await reset(code.toLowerCase()).expect(200);
+  assert.notEqual(ok.body.recoveryCode, code);
+  await reset(code).expect(401);
+  await old.get("/api/auth/me").expect(401);
+  await request(app).post("/api/auth/login").send({ username: "asha", password: "newpassword456" }).expect(200);
+});
+
+test("changing the password needs the current one", async () => {
+  const agent = await signUp();
+  await agent.post("/api/auth/password").send({ currentPassword: "nope", newPassword: "another-pass-1" }).expect(403);
+  await agent.post("/api/auth/password").send({ currentPassword: "password123", newPassword: "another-pass-1" }).expect(200);
+  await agent.get("/api/auth/me").expect(200);
+});
+
+test("Google sign-in never takes over a password account with the same name", async () => {
+  await signUp("a@example.com");
+  const google = request.agent(app);
+  const first = await google.post("/api/auth/google").send({ credential: "sub1|a@example.com" }).expect(200);
+  assert.notEqual(first.body.user.username, "a@example.com");
+  assert.equal(first.body.user.hasPassword, false);
+  const again = await google.post("/api/auth/google").send({ credential: "sub1|a@example.com" }).expect(200);
+  assert.equal(again.body.user._id, first.body.user._id);
+  await google.post("/api/auth/google").send({ credential: "garbage" }).expect(401);
+  await request(app).post("/api/auth/login").send({ username: first.body.user.username, password: "anything1" }).expect(401);
+  await google.delete("/api/auth/account").send({ confirm: "wrong" }).expect(403);
+  await google.delete("/api/auth/account").send({ confirm: first.body.user.username }).expect(200);
+});
+
+test("deleting an account removes its data and sessions", async () => {
+  const asha = await signUp("asha");
+  const ravi = await signUp("ravi");
+  await asha.post("/api/chats/c1/messages").send({ text: "hi" }).expect(200);
+  const own = (await asha.post("/api/trips").send({ destination: "Goa" }).expect(200)).body.trip;
+  const theirs = (await ravi.post("/api/trips").send({ destination: "Leh" }).expect(200)).body.trip;
+  const token = (await ravi.post(`/api/trips/${theirs.id}/invite`).expect(200)).body.trip.inviteToken;
+  await asha.post("/api/trips/join").send({ token }).expect(200);
+  await asha.delete("/api/auth/account").send({ password: "wrong-password" }).expect(403);
+  await asha.delete("/api/auth/account").send({ password: "password123" }).expect(200);
+  await asha.get("/api/auth/me").expect(401);
+  assert.equal(await mongoose.models.Chat.countDocuments(), 0);
+  assert.equal(await mongoose.models.Trip.countDocuments({ _id: own.id }), 0);
+  assert.equal((await ravi.get(`/api/trips/${theirs.id}`)).body.trip.members.length, 0);
+});
+
+test("AI plan is cleaned and limited to the asked days", async () => {
+  const agent = await signUp();
+  const res = await agent.post("/api/trips/generate").send({ destination: "Jaipur", days: 2, budget: "10000" }).expect(200);
+  const { trip } = res.body;
+  assert.equal(trip.days.length, 2);
+  assert.deepEqual(trip.days[0].items.map((i) => i.name), ["Amber Fort", "Bad pin"]);
+  assert.equal(trip.days[0].items[1].lat, undefined);
+  assert.equal(lastPlanRequest.budget, "10000");
+  await agent.post("/api/trips/generate").send({ destination: "Jaipur", days: 40 }).expect(400);
+});
+
+test("only invited people can see or edit a trip", async () => {
+  const asha = await signUp("asha");
+  const ravi = await signUp("ravi");
+  const { trip } = (await asha.post("/api/trips").send({ destination: "Goa" }).expect(200)).body;
+  const url = `/api/trips/${trip.id}`;
+  await ravi.get(url).expect(404);
+  await ravi.patch(url).send({ version: 1, title: "mine" }).expect(404);
+  await ravi.post(`${url}/expenses`).send({ description: "x", amount: 1, paidBy: "asha", splitAmong: ["asha"] }).expect(404);
+  await ravi.post("/api/trips/join").send({ token: "x".repeat(24) }).expect(404);
+
+  const token = (await asha.post(`${url}/invite`).expect(200)).body.trip.inviteToken;
+  await ravi.post("/api/trips/join").send({ token }).expect(200);
+  const seen = (await ravi.get(url).expect(200)).body.trip;
+  assert.equal(seen.role, "member");
+  assert.equal(seen.inviteToken, undefined);
+  assert.deepEqual(seen.people, ["asha", "ravi"]);
+  await ravi.delete(url).expect(403);
+  await ravi.post(`${url}/invite`).expect(403);
+
+  // Stale edits are refused instead of overwriting.
+  await ravi.patch(url).send({ version: 1, title: "Goa with friends" }).expect(200);
+  await asha.patch(url).send({ version: 1, title: "Old copy" }).expect(409);
+
+  const raviId = (await ravi.get("/api/auth/me")).body.user._id;
+  await asha.delete(`${url}/members/${raviId}`).expect(200);
+  await ravi.get(url).expect(404);
+  await ravi.post("/api/trips/join").send({ token }).expect(404);
+});
+
+test("expenses are validated, added and removed", async () => {
+  const agent = await signUp("asha");
+  const { trip } = (await agent.post("/api/trips").send({ destination: "Goa" })).body;
+  const url = `/api/trips/${trip.id}`;
+  await agent.patch(url).send({ version: 1, people: ["asha", "Ravi"] }).expect(200);
+  const base = { description: "Hotel", amount: 250000, paidBy: "asha", splitAmong: ["asha", "Ravi"] };
+  await agent.post(`${url}/expenses`).send({ ...base, amount: 10.5 }).expect(400);
+  await agent.post(`${url}/expenses`).send({ ...base, paidBy: "stranger" }).expect(400);
+  const added = (await agent.post(`${url}/expenses`).send(base).expect(200)).body.trip;
+  assert.equal(added.expenses.length, 1);
+  const removed = await agent.delete(`${url}/expenses/${added.expenses[0].id}`).expect(200);
+  assert.equal(removed.body.trip.expenses.length, 0);
+});
+
+test("a long itinerary can be saved, and lookups hide upstream errors", async () => {
+  const agent = await signUp();
+  const { trip } = (await agent.post("/api/trips").send({ destination: "Goa" })).body;
+  const days = Array.from({ length: 14 }, () => ({ items: Array.from({ length: 8 }, () => ({ name: "Place", notes: "n".repeat(400) })) }));
+  await agent.patch(`/api/trips/${trip.id}`).send({ version: 1, days }).expect(200);
+  await agent.get("/api/places/weather?q=Goa").expect(200);
+  await agent.get("/api/places/weather?q=Nowhere").expect(404);
+  const failed = await agent.get("/api/places/locate?q=Goa").expect(502);
+  assert.doesNotMatch(failed.text, /upstream detail/);
+  await request(app).get("/api/places/weather?q=Goa").expect(401);
 });
