@@ -7,6 +7,7 @@ const authRoutes = require("./routes/auth");
 const chatRoutes = require("./routes/chats");
 const tripRoutes = require("./routes/trips");
 const placeRoutes = require("./routes/places");
+const publicRoutes = require("./routes/public");
 const requireAuth = require("./middleware/auth");
 const { errorHandler, asyncHandler } = require("./middleware/errors");
 
@@ -46,6 +47,7 @@ function createApp({ config, ai, places, verifyGoogle = null, ready = async () =
     }),
   );
   app.get("/api/config", (req, res) => res.json({ googleClientId: config.googleClientId || null }));
+  app.use("/api/public", publicRoutes);
   app.use("/api/auth", authRoutes(config, { verifyGoogle }));
   app.use("/api/trips", requireAuth(config), tripRoutes({ config, ai }));
   app.use("/api/places", requireAuth(config), placeRoutes({ places }));

@@ -32,4 +32,24 @@ function cleanDays(days) {
 
 const cleanPeople = (people) => [...new Set(list(people, MAX_PEOPLE).map((p) => text(p, 64)).filter(Boolean))];
 
-module.exports = { newId, text, cleanDays, cleanPeople, isDate };
+const cleanPacking = (packing) =>
+  list(packing, 100)
+    .map((p) => ({
+      id: /^[a-f0-9]{1,32}$/.test(p?.id) ? p.id : newId(),
+      text: text(typeof p === "string" ? p : p?.text, 100),
+      done: p?.done === true,
+    }))
+    .filter((p) => p.text);
+
+const cleanIdeas = (ideas) =>
+  list(ideas, 8)
+    .map((i) => ({
+      place: text(i?.place, 100),
+      why: text(i?.why, 400),
+      cost: text(i?.cost, 80),
+      bestTime: text(i?.bestTime, 80),
+      highlights: list(i?.highlights, 5).map((h) => text(h, 120)).filter(Boolean),
+    }))
+    .filter((i) => i.place);
+
+module.exports = { newId, text, cleanDays, cleanPeople, cleanPacking, cleanIdeas, isDate };

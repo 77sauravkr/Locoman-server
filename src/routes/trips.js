@@ -3,17 +3,18 @@ const express = require("express");
 const Trip = require("../../models/Trip");
 const { limiter, dailyQuota } = require("../middleware/limits");
 const { HttpError, asyncHandler } = require("../middleware/errors");
-const { newId, text, cleanDays, cleanPeople, isDate } = require("../lib/trip");
+const { newId, text, cleanDays, cleanPeople, cleanPacking, cleanIdeas, isDate } = require("../lib/trip");
 
 const MAX_TRIPS = 50;
 const MAX_MEMBERS = 20;
 const MAX_EXPENSES = 300;
+const MAX_COMMENTS = 500;
 const ID = /^[a-f0-9]{24}$/;
 
 module.exports = ({ config, ai }) => {
   const router = express.Router();
   const joinLimit = limiter({ windowMs: 15 * 60 * 1000, limit: 20, keyGenerator: (req) => req.user.id });
-  const generateLimit = limiter({ windowMs: 60 * 1000, limit: 4, keyGenerator: (req) => req.user.id });
+  const generateLimit = limiter({ windowMs: 60 * 1000, limit: 8, keyGenerator: (req) => req.user.id });
 
   // A trip is visible to its owner and members only.
   const access = (req) => {
@@ -39,12 +40,16 @@ module.exports = ({ config, ai }) => {
       destination: trip.destination || "",
       startDate: trip.startDate || "",
       days: trip.days,
+      packing: trip.packing,
+      votes: trip.votes.map((v) => ({ itemId: v.itemId, mine: v.user === req.user.id })),
+      comments: trip.comments.map((c) => ({ id: c.id, itemId: c.itemId, name: c.name, text: c.text, canDelete: isOwner || c.user === req.user.id })),
+      updatedAt: trip.updatedAt,
       people: trip.people,
       expenses: trip.expenses.map(({ id, description, amount, paidBy, splitAmong }) => ({ id, description, amount, paidBy, splitAmong })),
       members: trip.members.map((m) => ({ id: m.user, name: m.name })),
       role: isOwner ? "owner" : "member",
       version: trip.version,
-      ...(isOwner && { inviteToken: trip.inviteToken || null }),
+      ...(isOwner && { inviteToken: trip.inviteToken || null, publicToken: trip.publicToken || null }),
     };
   };
 
@@ -63,6 +68,79 @@ module.exports = ({ config, ai }) => {
       days: cleanDays(days),
       people: [req.user.username],
     });
+
+  // Every AI call is rate limited, counted against the daily quota and has its errors reworded.
+  const quota = dailyQuota(config);
+  const askAi = async (run) => {
+    try {
+      return await run();
+    } catch (err) {
+      console.error("Trip AI request failed:", err.status || "", err.message);
+      throw new HttpError(err.status === 429 ? 429 : 502, "The AI could not do that right now. Please try again.");
+    }
+  };
+
+  router.post(
+    "/recommend",
+    generateLimit,
+    quota,
+    asyncHandler(async (req, res) => {
+      const days = Number(req.body?.days);
+      const request = {
+        from: text(req.body?.from, 80),
+        budget: text(req.body?.budget, 60),
+        month: text(req.body?.month, 20),
+        interests: text(req.body?.interests, 300),
+        days: Number.isInteger(days) && days > 0 && days <= 30 ? days : 0,
+      };
+      const suggestions = cleanIdeas((await askAi(() => ai.recommend(request)))?.suggestions);
+      if (!suggestions.length) throw new HttpError(502, "No suggestions this time. Please try again.");
+      res.json({ suggestions });
+    }),
+  );
+
+  // Returns a proposed plan; nothing changes until the user saves it.
+  router.post(
+    "/:id/revise",
+    generateLimit,
+    asyncHandler(async (req, res, next) => {
+      req.trip = await find(req);
+      req.instruction = text(req.body?.instruction, 300);
+      if (!req.instruction) throw new HttpError(400, "Say what you want to change");
+      next();
+    }),
+    quota,
+    asyncHandler(async (req, res) => {
+      const plan = await askAi(() =>
+        ai.reviseTrip({ destination: req.trip.destination, days: cleanDays(req.trip.toObject().days), instruction: req.instruction }),
+      );
+      const ids = new Map(req.trip.days.flatMap((d) => d.items.map((i) => [i.name.toLowerCase(), i.id])));
+      const days = cleanDays(plan?.days).map((day) => ({
+        ...day,
+        items: day.items.map((item) => ({ ...item, id: ids.get(item.name.toLowerCase()) || item.id })),
+      }));
+      if (!days.some((d) => d.items.length)) throw new HttpError(502, "The AI could not do that right now. Please try again.");
+      res.json({ days });
+    }),
+  );
+
+  router.post(
+    "/:id/packing",
+    generateLimit,
+    asyncHandler(async (req, res, next) => {
+      req.trip = await find(req);
+      next();
+    }),
+    quota,
+    asyncHandler(async (req, res) => {
+      const { destination, startDate, days, title } = req.trip;
+      const activities = days.flatMap((d) => d.items.map((i) => i.name)).slice(0, 30).join(", ");
+      const result = await askAi(() => ai.packingList({ destination: destination || title, startDate, days: days.length || 1, activities }));
+      const items = cleanPacking(result?.items);
+      if (!items.length) throw new HttpError(502, "The AI could not do that right now. Please try again.");
+      res.json({ items });
+    }),
+  );
 
   router.get(
     "/",
@@ -111,7 +189,7 @@ module.exports = ({ config, ai }) => {
       };
       next();
     }),
-    dailyQuota(config),
+    quota,
     asyncHandler(async (req, res) => {
       let plan;
       try {
@@ -173,6 +251,7 @@ module.exports = ({ config, ai }) => {
       if (body.startDate !== undefined) set.startDate = isDate(body.startDate) ? body.startDate : "";
       if (body.days !== undefined) set.days = cleanDays(body.days);
       if (body.people !== undefined) set.people = cleanPeople(body.people);
+      if (body.packing !== undefined) set.packing = cleanPacking(body.packing);
       if (!Number.isInteger(body.version)) throw new HttpError(400, "Missing version");
       const trip = await Trip.findOneAndUpdate(
         { ...access(req), version: body.version },
@@ -225,6 +304,90 @@ module.exports = ({ config, ai }) => {
       if (!self) trip.inviteToken = undefined;
       await trip.save();
       res.json(self ? { success: true } : { trip: view(trip, req) });
+    }),
+  );
+
+  // Cheap check used to notice changes by other group members.
+  router.get(
+    "/:id/stamp",
+    asyncHandler(async (req, res) => {
+      const trip = await Trip.findOne(access(req)).select("updatedAt");
+      if (!trip) throw new HttpError(404, "Trip not found");
+      res.json({ updatedAt: trip.updatedAt });
+    }),
+  );
+
+  const itemOf = async (req) => {
+    const trip = await find(req);
+    if (!trip.days.some((d) => d.items.some((i) => i.id === req.params.itemId)))
+      throw new HttpError(404, "That place is no longer in the plan");
+    return trip;
+  };
+  const respond = async (req, res, update, filter = {}) => {
+    const trip = await Trip.findOneAndUpdate({ ...access(req), ...filter }, update, { new: true });
+    res.json({ trip: view(trip || (await find(req)), req) });
+  };
+
+  // PUT adds this user's vote, DELETE removes it. Both are safe to repeat.
+  router.put(
+    "/:id/items/:itemId/vote",
+    asyncHandler(async (req, res) => {
+      await itemOf(req);
+      const mine = { itemId: req.params.itemId, user: req.user.id };
+      await respond(req, res, { $push: { votes: mine } }, { votes: { $not: { $elemMatch: mine } } });
+    }),
+  );
+  router.delete(
+    "/:id/items/:itemId/vote",
+    asyncHandler(async (req, res) => {
+      await respond(req, res, { $pull: { votes: { itemId: String(req.params.itemId), user: req.user.id } } });
+    }),
+  );
+
+  router.post(
+    "/:id/items/:itemId/comments",
+    asyncHandler(async (req, res) => {
+      await itemOf(req);
+      const body = text(req.body?.text, 300);
+      if (!body) throw new HttpError(400, "Write a comment first");
+      const comment = { id: newId(), itemId: req.params.itemId, user: req.user.id, name: req.user.username, text: body, createdAt: new Date() };
+      const trip = await Trip.findOneAndUpdate(
+        { ...access(req), [`comments.${MAX_COMMENTS - 1}`]: { $exists: false } },
+        { $push: { comments: comment } },
+        { new: true },
+      );
+      if (!trip) throw new HttpError(409, "This trip has too many comments");
+      res.json({ trip: view(trip, req) });
+    }),
+  );
+  router.delete(
+    "/:id/comments/:commentId",
+    asyncHandler(async (req, res) => {
+      const trip = await find(req);
+      const comment = trip.comments.find((c) => c.id === req.params.commentId);
+      if (comment && comment.user !== req.user.id && trip.owner !== req.user.id)
+        throw new HttpError(403, "You can only delete your own comments");
+      await respond(req, res, { $pull: { comments: { id: String(req.params.commentId) } } });
+    }),
+  );
+
+  // A public, read-only page of the plan. Off until the owner turns it on.
+  router.post(
+    "/:id/public",
+    asyncHandler(async (req, res) => {
+      const trip = await findOwned(req);
+      trip.publicToken ||= crypto.randomBytes(18).toString("base64url");
+      await trip.save();
+      res.json({ trip: view(trip, req) });
+    }),
+  );
+  router.delete(
+    "/:id/public",
+    asyncHandler(async (req, res) => {
+      const trip = await findOwned(req);
+      trip.publicToken = undefined;
+      await trip.save();
+      res.json({ trip: view(trip, req) });
     }),
   );
 

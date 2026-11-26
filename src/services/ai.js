@@ -54,6 +54,47 @@ const PLAN_SCHEMA = {
   },
 };
 
+const object = (properties, required) => ({ type: "OBJECT", properties, required });
+const arrayOf = (items) => ({ type: "ARRAY", items });
+const STRING = { type: "STRING" };
+
+const IDEAS_SCHEMA = object(
+  { suggestions: arrayOf(object({ place: STRING, why: STRING, cost: STRING, bestTime: STRING, highlights: arrayOf(STRING) }, ["place", "why"])) },
+  ["suggestions"],
+);
+const PACKING_SCHEMA = object({ items: arrayOf(STRING) }, ["items"]);
+
+const ideasPrompt = ({ from, days, budget, month, interests }) =>
+  [
+    "Suggest 5 different travel destinations.",
+    from && `Starting from: ${from}.`,
+    days && `Trip length: ${days} days.`,
+    budget && `Total budget: ${budget}.`,
+    month && `Travel month: ${month}.`,
+    interests && `Interests: ${interests}.`,
+    "For each give why it fits, a rough total cost in the user's currency, the best time to go and 3 highlights.",
+    "Only suggest places that realistically fit the budget, length and season.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+const revisePrompt = ({ destination, days, instruction }) =>
+  [
+    `This is a trip itinerary for ${destination} as JSON:`,
+    JSON.stringify(days),
+    `Change it as the traveller asks: ${instruction}`,
+    "Return the whole itinerary. Keep everything the request does not affect exactly as it is.",
+  ].join("\n");
+
+const packingPrompt = ({ destination, startDate, days, activities }) =>
+  [
+    `Make a packing list for a ${days}-day trip to ${destination}${startDate ? ` starting ${startDate}` : ""}.`,
+    activities && `Planned places: ${activities}.`,
+    "Consider the usual weather in that season. Give 12 to 25 short items, most important first.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
 function planPrompt({ destination, days, budget, interests, notes }) {
   return [
     `Plan a ${days}-day trip to ${destination}.`,
@@ -89,11 +130,11 @@ function createAi(config) {
 
   // Calls run(model, signal, answered) until one model works. An overloaded model can also
   // just hang, so each has a time limit that stops once it starts to answer.
-  async function* tryModels(run, userSignal) {
+  async function* tryModels(run, userSignal, firstLimitMs = config.modelTimeoutMs) {
     for (let i = 0; ; i++) {
       const last = i === models.length - 1;
       const limit = new AbortController();
-      const timer = setTimeout(() => limit.abort(), last ? LAST_TRY_MS : config.modelTimeoutMs);
+      const timer = setTimeout(() => limit.abort(), last ? LAST_TRY_MS : firstLimitMs);
       let started = false;
       const answered = () => {
         started = true;
@@ -117,6 +158,22 @@ function createAi(config) {
     }
   }
 
+  async function generateJson(prompt, schema) {
+    let json = "";
+    for await (const part of tryModels(async function* (model, abortSignal, answered) {
+      const result = await client.models.generateContent({
+        model,
+        contents: prompt,
+        config: { responseMimeType: "application/json", responseSchema: schema, abortSignal },
+      });
+      answered();
+      yield result.text || "";
+    }, undefined, config.modelTimeoutMs * 2)) { // the whole answer arrives at once
+      json += part;
+    }
+    return JSON.parse(json);
+  }
+
   return {
     streamReply(history, { signal, location } = {}) {
       return tryModels(async function* (model, attemptSignal, answered) {
@@ -135,21 +192,10 @@ function createAi(config) {
       }, signal);
     },
 
-    async planTrip(request) {
-      let json = "";
-      for await (const part of tryModels(async function* (model, abortSignal, answered) {
-        const result = await client.models.generateContent({
-          model,
-          contents: planPrompt(request),
-          config: { responseMimeType: "application/json", responseSchema: PLAN_SCHEMA, abortSignal },
-        });
-        answered();
-        yield result.text || "";
-      })) {
-        json += part;
-      }
-      return JSON.parse(json);
-    },
+    planTrip: (request) => generateJson(planPrompt(request), PLAN_SCHEMA),
+    reviseTrip: (request) => generateJson(revisePrompt(request), PLAN_SCHEMA),
+    recommend: (request) => generateJson(ideasPrompt(request), IDEAS_SCHEMA),
+    packingList: (request) => generateJson(packingPrompt(request), PACKING_SCHEMA),
 
     async transcribe(buffer, mimeType) {
       const contents = [

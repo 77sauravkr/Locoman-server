@@ -33,6 +33,13 @@ function createPlaces() {
       };
     },
 
+    // ExchangeRate-API open endpoint: free, updated daily, needs attribution.
+    async rates(base) {
+      const data = await getJson(`https://open.er-api.com/v6/latest/${base}`);
+      if (data.result !== "success") return null;
+      return { base, updated: data.time_last_update_utc, rates: data.rates };
+    },
+
     // OpenStreetMap Nominatim: one lookup per user action, with an identifying User-Agent.
     async locate(query) {
       const results = await getJson(

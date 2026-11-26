@@ -324,3 +324,70 @@ test("a long itinerary can be saved, and lookups hide upstream errors", async ()
   assert.doesNotMatch(failed.text, /upstream detail/);
   await request(app).get("/api/places/weather?q=Goa").expect(401);
 });
+
+test("recommendations are cleaned", async () => {
+  const agent = await signUp();
+  ai.recommend = async (r) => ({ suggestions: [{ place: "Pushkar", why: r.budget, highlights: ["lake", 5] }, { why: "no place" }] });
+  const res = await agent.post("/api/trips/recommend").send({ budget: "5000", days: "x" }).expect(200);
+  assert.deepEqual(res.body.suggestions, [{ place: "Pushkar", why: "5000", cost: "", bestTime: "", highlights: ["lake"] }]);
+  await request(app).post("/api/trips/recommend").expect(401);
+});
+
+test("AI changes are only proposed, and packing is saved by the user", async () => {
+  const agent = await signUp();
+  const { trip } = (await agent.post("/api/trips").send({ destination: "Goa" })).body;
+  const url = `/api/trips/${trip.id}`;
+  ai.reviseTrip = async ({ instruction }) => ({ days: [{ title: instruction, items: [{ name: "Beach" }] }] });
+  ai.packingList = async () => ({ items: ["Sunscreen", "", "Cap"] });
+  await agent.post(`${url}/revise`).send({}).expect(400);
+  const proposed = (await agent.post(`${url}/revise`).send({ instruction: "relaxed" }).expect(200)).body;
+  assert.equal(proposed.days[0].title, "relaxed");
+  assert.equal((await agent.get(url)).body.trip.days[0].items.length, 0);
+  const { items } = (await agent.post(`${url}/packing`).expect(200)).body;
+  assert.deepEqual(items.map((i) => i.text), ["Sunscreen", "Cap"]);
+  const saved = await agent.patch(url).send({ version: 1, packing: [{ ...items[0], done: true }] }).expect(200);
+  assert.equal(saved.body.trip.packing[0].done, true);
+  const stranger = await signUp("stranger");
+  await stranger.post(`${url}/packing`).expect(404);
+  await stranger.post(`${url}/revise`).send({ instruction: "x" }).expect(404);
+});
+
+test("group members vote and comment; only the author or owner deletes", async () => {
+  const asha = await signUp("asha");
+  const ravi = await signUp("ravi");
+  const { trip } = (await asha.post("/api/trips/generate").send({ destination: "Jaipur", days: 1 })).body;
+  const url = `/api/trips/${trip.id}`;
+  const item = trip.days[0].items[0].id;
+  await ravi.put(`${url}/items/${item}/vote`).expect(404);
+  const token = (await asha.post(`${url}/invite`)).body.trip.inviteToken;
+  await ravi.post("/api/trips/join").send({ token }).expect(200);
+  const before = (await asha.get(`${url}/stamp`).expect(200)).body.updatedAt;
+  await ravi.put(`${url}/items/${item}/vote`).expect(200);
+  const twice = (await ravi.put(`${url}/items/${item}/vote`).expect(200)).body.trip;
+  assert.deepEqual(twice.votes, [{ itemId: item, mine: true }]);
+  assert.notEqual((await asha.get(`${url}/stamp`)).body.updatedAt, before);
+  await ravi.put(`${url}/items/nope/vote`).expect(404);
+  const mine = (await asha.post(`${url}/items/${item}/comments`).send({ text: "must see" }).expect(200)).body.trip.comments[0];
+  await ravi.delete(`${url}/comments/${mine.id}`).expect(403);
+  await ravi.post(`${url}/items/${item}/comments`).send({ text: "agreed" }).expect(200);
+  await ravi.delete("/api/auth/account").send({ password: "password123" }).expect(200);
+  const after = (await asha.get(url)).body.trip;
+  assert.equal(after.votes.length, 0);
+  assert.deepEqual(after.comments.map((c) => c.text), ["must see"]);
+});
+
+test("a public page shows only the plan and can be turned off", async () => {
+  const asha = await signUp("asha");
+  const { trip } = (await asha.post("/api/trips/generate").send({ destination: "Jaipur", days: 1 })).body;
+  const url = `/api/trips/${trip.id}`;
+  const token = (await asha.post(`${url}/public`).expect(200)).body.trip.publicToken;
+  const res = await request(app).get(`/api/public/trips/${token}`).expect(200);
+  assert.deepEqual(Object.keys(res.body.trip).sort(), ["days", "destination", "startDate", "title"]);
+  assert.doesNotMatch(res.text, /asha|expenses|comments/);
+  await asha.delete(`${url}/public`).expect(200);
+  await request(app).get(`/api/public/trips/${token}`).expect(404);
+  places.rates = async (base) => (base === "XXX" ? null : { base, rates: { USD: 0.012 } });
+  await asha.get("/api/places/rates?base=inr").expect(200);
+  await asha.get("/api/places/rates?base=XXX").expect(404);
+  await asha.get("/api/places/rates?base=../x").expect(400);
+});

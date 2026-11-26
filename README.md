@@ -5,6 +5,10 @@ Client: https://github.com/77sauravkr/locoMan-client
 
 Express, MongoDB (Mongoose), Google Gemini (chat, photos, speech-to-text).
 
+## Architecture
+
+Diagrams, data model, decisions, security notes and roadmap: [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Run locally
 
 Needs Node 20+, MongoDB and a Gemini API key (https://aistudio.google.com/apikey).
@@ -25,7 +29,8 @@ npm test               # needs MongoDB; the AI is faked, no key or cost
 | GET | `/api/auth/me` | Current user |
 | POST | `/api/auth/reset`, `/google`, `/password`, `/recovery-code` | Recovery, Google sign-in, account changes |
 | DELETE | `/api/auth/account` | Delete the account and its data |
-| various | `/api/trips` | Itineraries, AI planning, group invites, expenses |
+| various | `/api/trips` | Itineraries, group invites, expenses |
+| POST | `/api/trips/generate`, `/recommend`, `/:id/revise`, `/:id/packing` | AI plan, destination ideas, AI changes, packing list |
 | GET | `/api/places/weather`, `/locate` | Weather (Open-Meteo) and map lookup (OpenStreetMap) |
 | GET | `/api/chats` | List chats |
 | GET, PATCH, DELETE | `/api/chats/:chatId` | Read, rename, delete |

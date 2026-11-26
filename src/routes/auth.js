@@ -201,7 +201,10 @@ module.exports = (config, { verifyGoogle }) => {
       await Promise.all([
         Chat.deleteMany({ user: id }),
         Trip.deleteMany({ owner: id }),
-        Trip.updateMany({ "members.user": id }, { $pull: { members: { user: id } } }),
+        Trip.updateMany(
+          { $or: [{ "members.user": id }, { "votes.user": id }, { "comments.user": id }] },
+          { $pull: { members: { user: id }, votes: { user: id }, comments: { user: id } } },
+        ),
       ]);
       await user.deleteOne();
       res.clearCookie("token", cookie);
