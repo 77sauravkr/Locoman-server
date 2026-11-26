@@ -42,9 +42,9 @@ function readLocation(location) {
 function aiError(err) {
   if (err instanceof HttpError) return err;
   console.error("AI request failed:", err.status || "", err.message);
-  return err.status === 429
-    ? new HttpError(429, "The AI usage limit was reached. Please try again in a few minutes.")
-    : new HttpError(502, "Could not get a reply. Please try again.");
+  if (err.status === 429) return new HttpError(429, "The AI usage limit was reached. Please try again in a few minutes.");
+  if (err.status === 503) return new HttpError(503, "The AI is very busy right now. Please try again in a minute.");
+  return new HttpError(502, "Could not get a reply. Please try again.");
 }
 
 const upload = multer({

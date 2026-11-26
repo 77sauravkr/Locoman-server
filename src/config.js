@@ -16,6 +16,7 @@ function loadConfig(env = process.env) {
     geminiApiKey: env.GEMINI_API_KEY.trim(),
     geminiBaseUrl: env.GEMINI_BASE_URL,
     model: env.GEMINI_MODEL || "gemini-3.8-flash",
+    fallbackModel: env.GEMINI_FALLBACK_MODEL || "gemini-3.5-flash-lite",
     corsOrigins: (env.CORS_ORIGIN || "").split(",").map((o) => o.trim()).filter(Boolean),
     trustProxy: int(env.TRUST_PROXY, 1),
     userDailyLimit: int(env.USER_DAILY_LIMIT, 50),

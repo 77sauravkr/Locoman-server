@@ -30,29 +30,58 @@ const toContents = (history) =>
     parts: [...(image ? [inline(image.mimeType, image.data)] : []), { text: content }],
   }));
 
+// Busy, overloaded or out of quota: worth trying the other model.
+const BUSY = new Set([429, 500, 503]);
+
 function createAi(config) {
+  const models = [...new Set([config.model, config.fallbackModel])].filter(Boolean);
+  const canFallBack = (err, index, signal) => BUSY.has(err.status) && index < models.length - 1 && !signal?.aborted;
+
   const client = new GoogleGenAI({
     apiKey: config.geminiApiKey,
     apiVersion: "v1beta",
     httpOptions: { timeout: 60_000, ...(config.geminiBaseUrl && { baseUrl: config.geminiBaseUrl }) },
   });
 
+  async function generate(request) {
+    for (let i = 0; ; i++) {
+      try {
+        return await client.models.generateContent({ ...request, model: models[i] });
+      } catch (err) {
+        if (!canFallBack(err, i)) throw err;
+        console.warn(`${models[i]} unavailable (${err.status}), trying ${models[i + 1]}`);
+      }
+    }
+  }
+
   return {
     async *streamReply(history, { signal, location } = {}) {
-      const stream = await client.models.generateContentStream({
-        model: config.model,
-        contents: toContents(history),
-        // The limit includes the model's thinking tokens, so it is generous.
-        config: { systemInstruction: systemInstruction({ location }), maxOutputTokens: 8192, abortSignal: signal },
-      });
-      for await (const chunk of stream) {
-        if (chunk.text) yield chunk.text;
+      for (let i = 0; ; i++) {
+        let started = false;
+        try {
+          const stream = await client.models.generateContentStream({
+            model: models[i],
+            contents: toContents(history),
+            // The limit includes the model's thinking tokens, so it is generous.
+            config: { systemInstruction: systemInstruction({ location }), maxOutputTokens: 8192, abortSignal: signal },
+          });
+          for await (const chunk of stream) {
+            if (chunk.text) {
+              started = true;
+              yield chunk.text;
+            }
+          }
+          return;
+        } catch (err) {
+          // Part of an answer is already on screen, so do not start a second one.
+          if (started || !canFallBack(err, i, signal)) throw err;
+          console.warn(`${models[i]} unavailable (${err.status}), trying ${models[i + 1]}`);
+        }
       }
     },
 
     async transcribe(buffer, mimeType) {
-      const result = await client.models.generateContent({
-        model: config.model,
+      const result = await generate({
         contents: [
           {
             role: "user",
