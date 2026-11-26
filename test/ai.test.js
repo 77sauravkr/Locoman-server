@@ -64,3 +64,9 @@ test("falls back when the first model never answers", () =>
     assert.equal(await ai.transcribe(Buffer.from("x"), "audio/webm"), "ok");
     assert.ok(called.includes("main") && called.includes("backup"));
   }));
+
+test("structured answers ask the lighter model first", () =>
+  withGemini(503, async (ai, called) => {
+    await assert.rejects(ai.planTrip({ destination: "Goa", days: 1 }), SyntaxError); // the fake replies "ok", not JSON
+    assert.deepEqual(called, ["backup"]);
+  }));

@@ -85,6 +85,9 @@ sequenceDiagram
   S-->>C: done (title, ids)
 ```
 
+Structured answers (trip plan, ideas, packing, AI edits) use the lighter model first, because
+they arrive in one piece and the main model was often too slow.
+
 ## Key decisions
 
 | Decision | Why | Trade-off |

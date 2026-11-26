@@ -130,9 +130,9 @@ function createAi(config) {
 
   // Calls run(model, signal, answered) until one model works. An overloaded model can also
   // just hang, so each has a time limit that stops once it starts to answer.
-  async function* tryModels(run, userSignal, firstLimitMs = config.modelTimeoutMs) {
+  async function* tryModels(run, userSignal, { order = models, firstLimitMs = config.modelTimeoutMs } = {}) {
     for (let i = 0; ; i++) {
-      const last = i === models.length - 1;
+      const last = i === order.length - 1;
       const limit = new AbortController();
       const timer = setTimeout(() => limit.abort(), last ? LAST_TRY_MS : firstLimitMs);
       let started = false;
@@ -142,21 +142,25 @@ function createAi(config) {
       };
       try {
         const signal = userSignal ? AbortSignal.any([userSignal, limit.signal]) : limit.signal;
-        yield* run(models[i], signal, answered);
+        yield* run(order[i], signal, answered);
         // Some versions end the stream quietly when aborted.
         if (!started && limit.signal.aborted) throw new Error("Model timed out");
         return;
       } catch (err) {
         const timedOut = limit.signal.aborted && !userSignal?.aborted;
-        if (timedOut) err = Object.assign(new Error(`${models[i]} timed out`), { status: 503 });
+        if (timedOut) err = Object.assign(new Error(`${order[i]} timed out`), { status: 503 });
         // Part of an answer is already on screen, so do not start a second one.
         if (started || last || userSignal?.aborted || !BUSY.has(err.status)) throw err;
-        console.warn(`${models[i]} unavailable (${err.status}), trying ${models[i + 1]}`);
+        console.warn(`${order[i]} unavailable (${err.status}), trying ${order[i + 1]}`);
       } finally {
         clearTimeout(timer);
       }
     }
   }
+
+  // Structured answers arrive all at once, and the main model has often been too slow for
+  // that, so the lighter model goes first and the main one is the backup.
+  const jsonOrder = [...models].reverse();
 
   async function generateJson(prompt, schema) {
     let json = "";
@@ -168,7 +172,7 @@ function createAi(config) {
       });
       answered();
       yield result.text || "";
-    }, undefined, config.modelTimeoutMs * 2)) { // the whole answer arrives at once
+    }, undefined, { order: jsonOrder, firstLimitMs: config.modelTimeoutMs * 2 })) {
       json += part;
     }
     return JSON.parse(json);
