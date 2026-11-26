@@ -6,9 +6,9 @@ const mongoose = require("mongoose");
 const authRoutes = require("./routes/auth");
 const chatRoutes = require("./routes/chats");
 const requireAuth = require("./middleware/auth");
-const { errorHandler } = require("./middleware/errors");
+const { errorHandler, asyncHandler } = require("./middleware/errors");
 
-function createApp({ config, ai }) {
+function createApp({ config, ai, ready = async () => {} }) {
   const app = express();
   app.set("trust proxy", config.trustProxy);
   app.use(helmet());
@@ -18,8 +18,14 @@ function createApp({ config, ai }) {
   app.use(cookieParser());
 
   app.get("/", (req, res) => res.send("Server is live!"));
-  app.get("/api/health", (req, res) => {
-    const db = mongoose.connection.readyState === 1;
+  app.get("/api/health", async (req, res) => {
+    const db = await ready().then(
+      () => mongoose.connection.readyState === 1,
+      (err) => {
+        console.error("MongoDB connection failed:", err.message);
+        return false;
+      },
+    );
     res.status(db ? 200 : 503).json({ ok: db });
   });
 
@@ -27,6 +33,13 @@ function createApp({ config, ai }) {
     res.set("Cache-Control", "no-store");
     next();
   });
+  app.use(
+    "/api",
+    asyncHandler(async (req, res, next) => {
+      await ready();
+      next();
+    }),
+  );
   app.use("/api/auth", authRoutes(config));
   app.use("/api/chats", requireAuth(config), chatRoutes({ config, ai }));
 

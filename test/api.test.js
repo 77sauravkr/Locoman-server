@@ -145,3 +145,13 @@ test("message length is limited", async () => {
   await agent.post("/api/chats/c1/messages").send({ text: "   " }).expect(400);
   await agent.post("/api/chats/c1/messages").send({ text: "a".repeat(4001) }).expect(400);
 });
+
+test("a failed database connection is retried by the next request", async () => {
+  let attempts = 0;
+  const ready = async () => {
+    if (++attempts === 1) throw new Error("connect timeout");
+  };
+  const flaky = createApp({ config, ai, ready });
+  await request(flaky).get("/api/health").expect(503);
+  await request(flaky).get("/api/health").expect(200);
+});
